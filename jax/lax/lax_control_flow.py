@@ -930,6 +930,10 @@ def _root_jvp(
   f_linearized_at_solution = partial(
       apply_flat_fun_nokwargs, partial(f_jvp, *params_zeros), (tree, tree),
   )
+  params_dot = tuple(
+      a if a is not ad.zero else b
+      for a, b in zip(params_dot, params_zeros)
+  )
   rhs = tree_unflatten(tree, f_jvp(*(params_dot + solution_zeros)))
   solution_dot = tree_map(
       operator.neg, tangent_solve(f_linearized_at_solution, rhs)

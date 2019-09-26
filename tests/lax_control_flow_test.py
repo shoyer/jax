@@ -1052,6 +1052,36 @@ class LaxControlFlowTest(jtu.JaxTestCase):
     b = rng.randn(2)
     jtu.check_grads(linear_solve, (a, b), order=2)
 
+  def test_root_eigenvalue(self):
+
+    def oracle(func, x0):
+      del func  # unused
+      return x0
+
+    def flatten(xs):
+      return np.concatenate([x.ravel() for x in xs])
+
+    def unflatten(xs, shapes):
+      splits = onp.cumsum([onp.prod(s) for s in shapes[:-1]])
+      return [np.reshape(x, s) for x, s in zip(np.split(xs, splits), shapes)]
+
+    def vector_solve(f, wv):
+      shapes = [x.shape for x in wv]
+      g = lambda x: flatten(f(tuple(unflatten(x, shapes))))
+      z = flatten(wv)
+      return tuple(unflatten(np.linalg.solve(api.jacobian(g)(z), z), shapes))
+
+    def eigensystem(a):
+      f = lambda wv: (np.zeros_like(wv[0]), np.dot(a, wv[1]) - wv[0] * wv[1])
+      initial_guess = np.linalg.eigh(a)
+      return lax.root(f, initial_guess, oracle, vector_solve)
+
+    rng = onp.random.RandomState(0)
+    a = rng.randn(2, 2)
+    a = a + a.T
+    # fails! every gradient is all NaNs :)
+    jtu.check_grads(eigensystem, (a,), order=2)
+
   def test_root_errors(self):
     with self.assertRaisesRegex(TypeError, re.escape("f() output pytree")):
       lax.root(lambda x: (x, x), 0.0, lambda f, x: x, lambda f, x: x)
