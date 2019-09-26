@@ -1071,14 +1071,25 @@ class LaxControlFlowTest(jtu.JaxTestCase):
       z = flatten(wv)
       return tuple(unflatten(np.linalg.solve(api.jacobian(g)(z), z), shapes))
 
+    def make_constraint(a):
+      def f(wv):
+        return (np.zeros_like(wv[0]), np.dot(a, wv[1]) - wv[0] * wv[1])
+      return f
+
     def eigensystem(a):
-      f = lambda wv: (np.zeros_like(wv[0]), np.dot(a, wv[1]) - wv[0] * wv[1])
+      constraint = make_constraint(a)
       initial_guess = np.linalg.eigh(a)
-      return lax.root(f, initial_guess, oracle, vector_solve)
+      return lax.root(constraint, initial_guess, oracle, vector_solve)
 
     rng = onp.random.RandomState(0)
     a = rng.randn(2, 2)
     a = a + a.T
+
+    constraint = make_constraint(a)
+    initial_guess = np.linalg.eigh(a)
+    onp.testing.assert_allclose(
+        constraint(initial_guess)[1], np.zeros(a.shape), atol=1e-6)
+
     # fails! every gradient is all NaNs :)
     jtu.check_grads(eigensystem, (a,), order=2)
 
