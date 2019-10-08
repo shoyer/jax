@@ -779,6 +779,16 @@ class ScipyLinalgTest(jtu.JaxTestCase):
                 unit_diagonal=unit_diagonal)
     jtu.check_grads(f, (A, B), 2, rtol=2e-2, eps=1e-3)
 
+  def test_issue_1458(self):
+    a = np.array([[1, -1], [0, 2.]])
+    b = np.array([1.0, 1.0])
+    c = np.array([[0.0, 0.0], [1.0, 0.0]])
+    expected = jtu.numerical_jvp(jax.scipy.linalg.solve, (a, b), (c, b))
+    _, actual = jax.jvp(jax.scipy.linalg.solve, (a, b), (c, b))
+    self.assertAllClose(expected, actual, check_dtypes=True)
+    _, actual = jax.jvp(jax.scipy.linalg.solve_triangular, (a, b), (c, b))
+    self.assertAllClose(expected, actual, check_dtypes=True)
+
 
 if __name__ == "__main__":
   absltest.main()
