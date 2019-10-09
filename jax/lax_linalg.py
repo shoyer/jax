@@ -71,11 +71,12 @@ def svd(x, full_matrices=True, compute_uv=True):
     return s
 
 def triangular_solve(a, b, left_side=False, lower=False, transpose_a=False,
-                     conjugate_a=False, unit_diagonal=False):
+                     conjugate_a=False, unit_diagonal=False, needs_mask=False):
   conjugate_a = conjugate_a and np.issubdtype(lax.dtype(a), np.complexfloating)
   return triangular_solve_p.bind(
       a, b, left_side=left_side, lower=lower, transpose_a=transpose_a,
-      conjugate_a=conjugate_a, unit_diagonal=unit_diagonal)
+      conjugate_a=conjugate_a, unit_diagonal=unit_diagonal,
+      needs_mask=needs_mask)
 
 
 # utilities
@@ -316,16 +317,18 @@ def triangular_solve_shape_rule(a, b, left_side=False, **unused_kwargs):
   return b.shape
 
 def triangular_solve_jvp_rule_a(
-    g_a, ans, a, b, left_side, lower, transpose_a, conjugate_a, unit_diagonal):
+    g_a, ans, a, b, left_side, lower, transpose_a, conjugate_a, unit_diagonal,
+    needs_mask):
   if g_a is ad_util.zero:
     return ad_util.zero
   k = 1 if unit_diagonal else 0
-  g_a = np.tril(g_a, k=-k) if lower else np.triu(g_a, k=k)
+  if needs_mask:
+    g_a = np.tril(g_a, k=-k) if lower else np.triu(g_a, k=k)
   g_a = lax.neg(g_a)
   g_a = np.swapaxes(g_a, -1, -2) if transpose_a else g_a
   g_a = np.conj(g_a) if conjugate_a else g_a
   tmp = triangular_solve(a, g_a, left_side, lower, transpose_a, conjugate_a,
-                         unit_diagonal)
+                         unit_diagonal, needs_mask)
   dot = lax.dot if g_a.ndim == 2 else lax.batch_matmul
   if left_side:
     return dot(tmp, ans)
@@ -334,18 +337,19 @@ def triangular_solve_jvp_rule_a(
 
 def triangular_solve_transpose_rule(
     cotangent, a, b, left_side, lower, transpose_a, conjugate_a,
-    unit_diagonal):
+    unit_diagonal, needs_mask):
   # Triangular solve is nonlinear in its first argument and linear in its second
   # argument, analogous to `div` but swapped.
   assert a is not ad.undefined_primal and b is ad.undefined_primal
   cotangent_b = triangular_solve(a, cotangent, left_side, lower,
-                                 not transpose_a, conjugate_a, unit_diagonal)
+                                 not transpose_a, conjugate_a, unit_diagonal,
+                                 needs_mask)
   return [None, cotangent_b]
 
 
 def triangular_solve_batching_rule(batched_args, batch_dims, left_side,
                                    lower, transpose_a, conjugate_a,
-                                   unit_diagonal):
+                                   unit_diagonal, needs_mask):
   x, y = batched_args
   bx, by = batch_dims
   size = next(t.shape[i] for t, i in zip(batched_args, batch_dims)
@@ -354,7 +358,7 @@ def triangular_solve_batching_rule(batched_args, batch_dims, left_side,
   y = batching.bdim_at_front(y, by, size)
   return triangular_solve(x, y, left_side=left_side, lower=lower,
                           transpose_a=transpose_a, conjugate_a=conjugate_a,
-                          unit_diagonal=unit_diagonal), 0
+                          unit_diagonal=unit_diagonal, needs_mask=needs_mask), 0
 
 triangular_solve_p = standard_primitive(
     triangular_solve_shape_rule, triangular_solve_dtype_rule,
@@ -367,7 +371,9 @@ batching.primitive_batchers[triangular_solve_p] = triangular_solve_batching_rule
 
 
 def _triangular_solve_cpu_translation_rule(
-    c, a, b, left_side, lower, transpose_a, conjugate_a, unit_diagonal):
+    c, a, b, left_side, lower, transpose_a, conjugate_a, unit_diagonal,
+    needs_mask):
+  del needs_mask  # unused
   shape = c.GetShape(a)
   dtype = shape.element_type().type
   if len(shape.dimensions()) == 2 and dtype in _cpu_lapack_types:
@@ -388,7 +394,9 @@ xla.backend_specific_translations['cpu'][triangular_solve_p] = \
   _triangular_solve_cpu_translation_rule
 
 def _triangular_solve_gpu_translation_rule(
-    c, a, b, left_side, lower, transpose_a, conjugate_a, unit_diagonal):
+    c, a, b, left_side, lower, transpose_a, conjugate_a, unit_diagonal,
+    needs_mask):
+  del needs_mask  # unused
   shape = c.GetShape(a)
   dtype = shape.element_type().type
   dims = shape.dimensions()

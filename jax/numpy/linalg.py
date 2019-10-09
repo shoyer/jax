@@ -268,9 +268,12 @@ def solve(a, b):
   iotas = np.ix_(*(lax.iota(np.int32, b) for b in batch_dims + (1,)))
   x = x[iotas[:-1] + (permutation, slice(None))]
 
-  x = lax_linalg.triangular_solve(lu, x, left_side=True, lower=True,
-                                  unit_diagonal=True)
-  x = lax_linalg.triangular_solve(lu, x, left_side=True, lower=False)
+  l = np.tril(lu, k=-1)
+  x = lax_linalg.triangular_solve(
+      l, x, left_side=True, lower=True, unit_diagonal=True, needs_mask=True)
+  u = np.triu(lu)
+  x = lax_linalg.triangular_solve(
+      u, x, left_side=True, lower=False, needs_mask=True)
 
   return x[..., 0] if a_ndims == b_ndims + 1 else x
 
