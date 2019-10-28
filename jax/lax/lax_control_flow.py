@@ -1141,6 +1141,34 @@ def _custom_linear_solve_impl(*args, **kwargs):
   return x
 
 
+def _custom_linear_solve_batching_rule(args, dims, const_lengths, jaxprs, tree):
+  size, = {x.shape[d] for x, d in zip(args, dims) if d is not batching.not_mapped}
+  orig_batched = [d is not batching.not_mapped for d in dims]
+  consts, b = _split_linear_solve_args(args, const_lengths)
+
+  body_jaxpr_batched, carry_bat_out = batching.batch_jaxpr(
+      body_jaxpr, size, batched, instantiate=carry_bat)
+
+  # cconst_bat, bconst_bat, init_bat = split_list(orig_batched, [cond_nconsts, body_nconsts])
+
+  # consts, init = split_list(args, [cond_nconsts + body_nconsts])
+  params_dims, b_dims = split_list(dims, const_lengths)
+  new_args = [batching.moveaxis(x, d, 0) if d is not batching.not_mapped and d != 0
+                else x for x, d in zip(_flatten(consts), _flatten(const_dims))]
+  new_b = 
+
+  new_init = [batching.broadcast(x, size, 0) if now_bat and not was_bat
+              else batching.moveaxis(x, d, 0) if now_bat else x
+              for x, d, was_bat, now_bat in zip(init, init_dims, init_bat, carry_bat)]
+
+  outs = while_p.bind(*(new_consts + new_init),
+                      cond_nconsts=cond_nconsts, cond_jaxpr=cond_jaxpr_batched,
+                      body_nconsts=body_nconsts, body_jaxpr=body_jaxpr_batched)
+  out_bdims = [0 if b else batching.not_mapped for b in carry_bat]
+  return outs, out_bdims
+
+
+
 def _tangent_linear_map(func, params, params_dot, *x):
   """Compute the tangent of a linear map.
 
