@@ -162,6 +162,7 @@ class PyTreeDef {
     kNone,        // None.
     kTuple,       // A tuple
     kNamedTuple,  // A collections.namedtuple
+    kDataClass,   // A dataclasses.dataclass
     kList,        // A list
     kDict,        // A dict
     kCustom,      // A custom type.
@@ -173,9 +174,10 @@ class PyTreeDef {
     // Arity for non-kLeaf types.
     int arity = 0;
 
-    // Kind-specific auxiliary data. For a kNamedTuple, contains the tuple type
-    // object. For a kDict, contains a sorted list of keys. For a kCustom type,
-    // contains the auxiliary data returned by the `to_iterable` function.
+    // Kind-specific auxiliary data. For a kNamedTuple and kDataClass, contains
+    // the tuple type object. For a kDict, contains a sorted list of keys. For a
+    // kCustom type, contains the auxiliary data returned by the `to_iterable`
+    // function.
     py::object node_data;
 
     const CustomNodeRegistry::Registration* custom = nullptr;
@@ -300,6 +302,18 @@ void PyTreeDef::FlattenHelper(py::handle handle, py::list* leaves,
     for (py::handle entry : tuple) {
       FlattenHelper(entry, leaves, tree);
     }
+  } else if (py::hasattr(handle, "__dataclass_fields__") &&
+             !py::isinstance<py::class_>(handle)) {
+    // This is the same check used inside dataclasses.is_dataclass, but avoids
+    // the hard dependency (dataclasses is Python 3.7+ only)
+    py::object dataclasses = py::module::import("dataclasses");
+    py::tuple tuple = dataclasses.astuple(handle);
+    node.kind = Kind::kDataClass;
+    node.arity = tuple.size();
+    node.node_data = py::reinterpret_borrow<py::object>(tuple.get_type());
+    for (py::handle entry : tuple) {
+      FlattenHelper(entry, leaves, tree);
+    }
   } else {
     node.kind = Kind::kLeaf;
     leaves->append(py::reinterpret_borrow<py::object>(handle));
@@ -340,6 +354,7 @@ py::object PyTreeDef::Unflatten(py::iterable leaves) const {
       case Kind::kNone:
       case Kind::kTuple:
       case Kind::kNamedTuple:
+      case Kind::kDataClass:
       case Kind::kList:
       case Kind::kDict:
       case Kind::kCustom: {
@@ -378,12 +393,13 @@ py::object PyTreeDef::Unflatten(py::iterable leaves) const {
       return py::none();
 
     case Kind::kTuple:
-    case Kind::kNamedTuple: {
+    case Kind::kNamedTuple:
+    case Kind::kDataClass: {
       py::tuple tuple(node.arity);
       for (int i = 0; i < node.arity; ++i) {
         tuple[i] = std::move(children[i]);
       }
-      if (node.kind == Kind::kNamedTuple) {
+      if (node.kind == Kind::kNamedTuple || node.kind == Kind::kDataClass) {
         return node.node_data(*tuple);
       } else {
         return std::move(tuple);
@@ -525,6 +541,30 @@ py::list PyTreeDef::FlattenUpTo(py::handle xs) const {
         break;
       }
 
+      case Kind::kDataClass: {
+        if (!(py::hasattr(handle, "__dataclass_fields__") &&
+              !py::isinstance<py::class_>(handle))) {
+          throw std::invalid_argument(absl::StrFormat(
+              "Expected dataclass, got %s.", py::repr(object)));
+        }
+        py::object dataclasses = py::module::import("dataclasses");
+        py::tuple tuple = dataclasses.astuple(handle);
+        if (tuple.size() != node.arity) {
+          throw std::invalid_argument(absl::StrFormat(
+              "Dataclass arity mismatch: %d != %d; object: %s.", tuple.size(),
+              node.arity, py::repr(object)));
+        }
+        if (object.get_type().not_equal(node.node_data)) {
+          throw std::invalid_argument(absl::StrFormat(
+              "Dataclass type mismatch: expected type: %s, object: %s.",
+              py::repr(node.node_data), py::repr(object)));
+        }
+        for (py::handle entry : tuple) {
+          agenda.push_back(py::reinterpret_borrow<py::object>(entry));
+        }
+        break;
+      }
+
       case Kind::kCustom: {
         auto* registration = CustomNodeRegistry::Lookup(object.get_type());
         if (registration != node.custom) {
@@ -585,6 +625,7 @@ py::object PyTreeDef::Walk(const py::function& f_node, py::handle f_leaf,
       case Kind::kNone:
       case Kind::kTuple:
       case Kind::kNamedTuple:
+      case Kind::kDataClass:
       case Kind::kList:
       case Kind::kDict:
       case Kind::kCustom: {
@@ -713,6 +754,9 @@ std::string PyTreeDef::ToString() const {
       case Kind::kNamedTuple:
         kind = "namedtuple";
         break;
+      case Kind::kDataClass:
+        kind = "dataclass";
+        break
       case Kind::kTuple:
         kind = "tuple";
         break;
