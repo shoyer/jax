@@ -712,25 +712,28 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
                           rtol=tol)
 
   @parameterized.named_parameters(jtu.cases_from_list(
-      {"testcase_name": "_shape={}_mode={}_rpadwidth={}_rconstantvalues={}".format(
-          jtu.format_shape_dtype_string(shape, dtype), mode, pad_width_rank,
-          constant_values_rank),
+      {"testcase_name": "_shape={}_mode={}_reflecttype{}_rpadwidth={}_"
+                        "rconstantvalues={}".format(
+          jtu.format_shape_dtype_string(shape, dtype), mode, reflect_type,
+          pad_width_rank, constant_values_rank),
        "shape": shape, "dtype": dtype, "mode": mode,
-       "pad_width_rank": pad_width_rank,
+       "reflect_type": reflect_type, "pad_width_rank": pad_width_rank,
        "constant_values_rank": constant_values_rank, "rng": jtu.rand_default(),
        "irng": jtu.rand_int(3)}
-      for mode, constant_values_rank, shapes in [
-        ('constant', 0, all_shapes),
-        ('constant', 1, all_shapes),
-        ('constant', 2, all_shapes),
-        ('symmetric', None, nonempty_shapes),
-        ('reflect', None, nonempty_shapes),
-        ('wrap', None, nonempty_shapes),
+      for mode, constant_values_rank, reflect_type, shapes in [
+        ('constant', 0, None, all_shapes),
+        ('constant', 1, None, all_shapes),
+        ('constant', 2, None, all_shapes),
+        ('symmetric', None, "even", nonempty_shapes),
+        ('symmetric', None, "odd", nonempty_shapes),
+        ('reflect', None, "even", nonempty_shapes),
+        ('reflect', None, "odd", nonempty_shapes),
+        ('wrap', None, None, nonempty_shapes),
       ]
       for shape in shapes for dtype in all_dtypes
       for pad_width_rank in range(3)))
-  def testPad(self, shape, dtype, mode, pad_width_rank, constant_values_rank,
-              rng, irng):
+  def testPad(self, shape, dtype, mode, reflect_type, pad_width_rank,
+              constant_values_rank, rng, irng):
     pad_width = irng([len(shape), 2][2 - pad_width_rank:], onp.int32)
     def onp_fun(x, kwargs):
       if pad_width.size == 0:
@@ -744,6 +747,8 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
       if constant_values_rank:
         kwargs["constant_values"] = rng(
           [len(shape), 2][2 - constant_values_rank:], dtype)
+      if reflect_type is not None:
+        kwargs["reflect_type"] = reflect_type
       return rng(shape, dtype), kwargs
 
     self._CheckAgainstNumpy(onp_fun, lnp_fun, args_maker, check_dtypes=True)

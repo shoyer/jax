@@ -1374,13 +1374,20 @@ nancumprod = _make_cumulative_reduction(
 
 ### Array-creation functions
 
-@partial(jit, static_argnums=(1, 2))
-def _pad(array, pad_width, mode, constant_values):
+@partial(jit, static_argnums=(1, 2, 4))
+def _pad(array, pad_width, mode, constant_values, reflect_type):
   array = asarray(array)
   nd = ndim(array)
   pad_width = onp.broadcast_to(onp.asarray(pad_width), (nd, 2))
   if any(pad_width < 0):
     raise ValueError("index can't contain negative values")
+
+  if mode in ("reflect", "symmetric"):
+    if reflect_type is None:
+      reflect_type = "even"
+  else:
+    if reflect_type is not None:
+      raise ValueError("reflect_type is not supported for mode={}".format(mode))
 
   if mode == "constant":
     constant_values = broadcast_to(asarray(constant_values), (nd, 2))
@@ -1411,12 +1418,19 @@ def _pad(array, pad_width, mode, constant_values):
         while padding > delta:
           padding -= delta
           p = array if forward else rarray
-          xs.append(lax.slice_in_dim(p, offset, n, axis=i))
+          x = lax.slice_in_dim(p, offset, n, axis=i)
+          if reflect_type == "odd":
+            border = lax.slice_in_dim(p, padding, 1, axis=i)
+            x = 2 * border - x
+          xs.append(x)
           if not wrap_mode:
             forward = not forward
         if padding > 0:
-          x = lax.slice_in_dim(array if forward else rarray, offset,
-                               padding + offset, axis=i)
+          p = array if forward else rarray
+          x = lax.slice_in_dim(p, offset, padding + offset, axis=i)
+          if reflect_type == "odd":
+            border = lax.slice_in_dim(p, offset, 1, axis=i)
+            x = 2 * border - x
           xs.append(x)
         return xs
 
@@ -1431,8 +1445,9 @@ def _pad(array, pad_width, mode, constant_values):
     raise NotImplementedError(msg.format(mode))
 
 @_wraps(onp.pad)
-def pad(array, pad_width, mode='constant', constant_values=0):
-  return _pad(array, pad_width, mode, constant_values)
+def pad(array, pad_width, mode='constant', constant_values=0,
+        reflect_type=None):
+  return _pad(array, pad_width, mode, constant_values, reflect_type)
 
 
 @_wraps(onp.stack)
