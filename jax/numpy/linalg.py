@@ -36,6 +36,7 @@ from ..util import get_module_functions
 
 
 _T = lambda x: np.swapaxes(x, -1, -2)
+_H = lambda x: _T(x).conj()
 
 
 def _promote_arg_dtypes(*args):
@@ -57,9 +58,29 @@ def cholesky(a):
   return lax_linalg.cholesky(a)
 
 
+def _argsort_desc(a, axis):
+  return a.shape[axis] - 1 - np.argsort(a, axis=-1)
+
+
 @_wraps(onp.linalg.svd)
-def svd(a, full_matrices=True, compute_uv=True):
+def svd(a, full_matrices=True, compute_uv=True, hermitian=False):
   a = _promote_arg_dtypes(np.asarray(a))
+  if hermitian:
+    if compute_uv:
+      s, u = eigh(a)
+      order = _argsort_desc(abs(s))
+      s = s[..., order]
+      u = u[..., order]
+      # move sign from s into v
+      v = _H(u * np.sign(s)[..., np.newaxis, :])
+      s = abs(s)
+      return u, s, v
+    else:
+      s = eigvalsh(a)
+      order = _argsort_desc(abs(s))
+      s = s[..., order]
+      s = abs(s)
+      return s
   return lax_linalg.svd(a, full_matrices, compute_uv)
 
 
