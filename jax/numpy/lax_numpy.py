@@ -2541,17 +2541,18 @@ def diag(v, k=0):
     raise ValueError("diag input must be 1d or 2d")
 
 
+@jit
+def _polyval(p, x):
+  shape = lax.broadcast_shapes(p.shape[1:], x.shape)
+  dtype = result_type(p, x)
+  y = lax.full_like(x, 0, shape, dtype)
+  y, _ = lax.scan(lambda y, p: (y * x + p, None), y, p)
+  return y
+
+
 @_wraps(np.polyval)
 def polyval(p, x):
-  if isinstance(p, np.poly1d):
-    p = np.asarray(p)
-  if isinstance(x, np.poly1d):
-    y = 0
-  else:
-    y = zeros_like(x)
-  for i in range(len(p)):
-    y = y * x + p[i]
-  return y
+  return _polyval(p, x)
 
 
 @_wraps(np.append)
