@@ -2545,7 +2545,7 @@ def diag(v, k=0):
 def _polyval(p, x):
   shape = lax.broadcast_shapes(p.shape[1:], x.shape)
   dtype = result_type(p, x)
-  y = lax.full_like(x, 0, shape, dtype)
+  y = lax.full_like(x, 0, shape=shape, dtype=dtype)
   y, _ = lax.scan(lambda y, p: (y * x + p, None), y, p)
   return y
 
