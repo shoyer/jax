@@ -650,6 +650,18 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
     self._CompileAndCheck(jnp_fun, args_maker, check_dtypes=True)
 
   @parameterized.named_parameters(jtu.cases_from_list(
+      {"testcase_name": str(size), "size": size}
+      for size in [0, 1, 2, 3, 64, 65, 128]))
+  def testPolyvalUnrollSizes(self, size):
+    # we already test polyval for random shapes in testOp, but here we exercise
+    # particular shapes that might be problematic
+    rng = jtu.rand_default(self.rng(), scale=0.1)
+    dtype = onp.float32
+    args_maker = lambda: [rng((size,), dtype), rng((), dtype)]
+    self._CheckAgainstNumpy(
+      onp.polyval, jnp.polyval, args_maker, check_dtypes=True)
+
+  @parameterized.named_parameters(jtu.cases_from_list(
       {"testcase_name": "_shape={}_axis={}".format(
           jtu.format_shape_dtype_string(shape, dtype), axis),
        "shape": shape, "dtype": dtype, "axis": axis}

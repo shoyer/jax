@@ -2546,7 +2546,25 @@ def _polyval(p, x):
   shape = lax.broadcast_shapes(p.shape[1:], x.shape)
   dtype = result_type(p, x)
   y = lax.full_like(x, 0, shape=shape, dtype=dtype)
-  y, _ = lax.scan(lambda y, p: (y * x + p, None), y, p)
+
+  # Explicit loops on accelerators can be slow, but on the other hand
+  # unrolling too many steps results in very large amounts of compiled code.
+  # Pick an intermediate number of unrolled steps as a compromise.
+  # TODO(shoyer): move this logic for partial unrolling into lax.scan or
+  # lax.while_loop?
+  unrolled_steps = 64
+  loop_steps = p.shape[0] // unrolled_steps
+
+  n = loop_steps * unrolled_steps
+  p_main, p_remainder = p[:n], p[n:]
+
+  def f(y, p):
+    for i in range(len(p)):
+      y = y * x + p[i]
+    return (y, None)
+
+  y, _ = lax.scan(f, y, p_main.reshape(loop_steps, unrolled_steps))
+  y, _ = f(y, p_remainder)
   return y
 
 
