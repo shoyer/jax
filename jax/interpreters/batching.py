@@ -12,11 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import numpy as onp
-from typing import Any, Callable, Dict, Optional, Sequence, Tuple, Union
+import numpy as np
+from typing import Any, Callable, Dict, Optional, Tuple, Union
 
+import jax
 from .. import core
-from .. import dtypes
 from ..core import Trace, Tracer, new_master
 from ..abstract_arrays import ShapedArray, raise_to_shaped
 from ..ad_util import add_jaxvals, add_jaxvals_p, zeros_like_jaxval, zeros_like_p
@@ -103,7 +103,7 @@ class BatchTracer(Tracer):
         return aval
       elif type(aval) is ShapedArray:
         assert 0 <= self.batch_dim < aval.ndim
-        new_shape = tuple(onp.delete(aval.shape, self.batch_dim))
+        new_shape = tuple(np.delete(aval.shape, self.batch_dim))
         return ShapedArray(new_shape, aval.dtype)
       else:
         raise TypeError(aval)
@@ -161,11 +161,12 @@ class BatchTrace(Trace):
     if all(dim is not_mapped for dim in dims):
       return map_primitive.bind(f, *vals, **params)
     else:
+      mapped_invars = params['mapped_invars']
       size, = {x.shape[d] for x, d in zip(vals, dims) if d is not not_mapped}
-      is_batched = tuple(d is not not_mapped for d in dims)
-      vals = [moveaxis(x, d, 1) if d is not not_mapped and d != 1 else x
-              for x, d in zip(vals, dims)]
-      dims = tuple(not_mapped if d is not_mapped else 0 for d in dims)
+      vals = [moveaxis(x, d, 1) if d == 0 and mapped_invar else x
+              for x, d, mapped_invar in zip(vals, dims, mapped_invars)]
+      dims = tuple(not_mapped if d is not_mapped else max(0, d - mapped_invar)
+                   for d, mapped_invar in zip(dims, mapped_invars))
       f, dims_out = batch_subtrace(f, self.master, dims)
       vals_out = map_primitive.bind(f, *vals, **params)
       dims_out = tuple(d + 1 if d is not not_mapped else d for d in dims_out())
@@ -235,7 +236,7 @@ def broadcast_batcher(prim, args, dims, **params):
       either an int indicating the batch dimension, or else `not_mapped`
       indicating no batching.
   """
-  shapes = {(x.shape, d) for x, d in zip(args, dims) if onp.ndim(x)}
+  shapes = {(x.shape, d) for x, d in zip(args, dims) if np.ndim(x)}
   if len(shapes) == 1:
     # if there's only agreeing batch dims and scalars, just call the primitive
     d = next(d for d in dims if d is not not_mapped)
@@ -244,16 +245,16 @@ def broadcast_batcher(prim, args, dims, **params):
   else:
     size, = {shape[d] for shape, d in shapes if d is not not_mapped}
     args = [bdim_at_front(x, d, size) for x, d in zip(args, dims)]
-    ndim = max(onp.ndim(x) for x in args)  # special-case scalar broadcasting
+    ndim = max(np.ndim(x) for x in args)  # special-case scalar broadcasting
     args = [_handle_scalar_broadcasting(ndim, x, d) for x, d in zip(args, dims)]
     out = prim.bind(*args, **params)
     return (out, (0,) * len(out)) if prim.multiple_results else (out, 0)
 
 def _handle_scalar_broadcasting(nd, x, d):
-  if d is not_mapped or nd == onp.ndim(x):
+  if d is not_mapped or nd == np.ndim(x):
     return x
   else:
-    return x.reshape(x.shape + (1,) * (nd - onp.ndim(x)))
+    return x.reshape(x.shape + (1,) * (nd - np.ndim(x)))
 
 def defreducer(prim):
   primitive_batchers[prim] = partial(reducer_batcher, prim)
@@ -261,8 +262,8 @@ def defreducer(prim):
 def reducer_batcher(prim, batched_args, batch_dims, axes, **params):
   operand, = batched_args
   bdim, = batch_dims
-  axes = tuple(onp.where(onp.less(axes, bdim), axes, onp.add(axes, 1)))
-  bdim_out = int(list(onp.delete(onp.arange(operand.ndim), axes)).index(bdim))
+  axes = tuple(np.where(np.less(axes, bdim), axes, np.add(axes, 1)))
+  bdim_out = int(list(np.delete(np.arange(operand.ndim), axes)).index(bdim))
   if 'input_shape' in params:
     params = dict(params, input_shape=operand.shape)
   return prim.bind(operand, axes=axes, **params), bdim_out
@@ -295,13 +296,6 @@ defvectorized(xla.device_put_p)
 
 ### util
 
-# These utilities depend on primitives for things like broadcasting, reshaping,
-# and transposition on arrays. To avoid a circular import from depending on
-# lax.py, these functions use method dispatch on their arguments, which could be
-# DeviceArrays, numpy.ndarrays, or traced versions of those. This strategy
-# almost works, except for broadcast, for which raw numpy.ndarrays don't have a
-# method. To handle that case, the `broadcast` function uses a try/except.
-
 class _Last(object): pass
 last = _Last()
 
@@ -309,14 +303,11 @@ def broadcast(x, sz, axis):
   if core.get_aval(x) is core.abstract_unit:
     return core.unit
   if axis is last:
-    axis = onp.ndim(x)
-  shape = list(onp.shape(x))
+    axis = np.ndim(x)
+  shape = list(np.shape(x))
   shape.insert(axis, sz)
-  if isinstance(x, onp.ndarray) or onp.isscalar(x):
-    return onp.broadcast_to(dtypes.coerce_to_array(x), shape)
-  else:
-    broadcast_dims = tuple(onp.delete(onp.arange(len(shape)), axis))
-    return x.broadcast_in_dim(shape, broadcast_dims)
+  broadcast_dims = tuple(np.delete(np.arange(len(shape)), axis))
+  return jax.lax.broadcast_in_dim(x, shape, broadcast_dims)
 
 def moveaxis(x, src, dst):
   if core.get_aval(x) is core.abstract_unit:
@@ -324,7 +315,7 @@ def moveaxis(x, src, dst):
   if src == dst:
     return x
   src, dst = src % x.ndim, dst % x.ndim
-  perm = [i for i in range(onp.ndim(x)) if i != src]
+  perm = [i for i in range(np.ndim(x)) if i != src]
   perm.insert(dst, src)
   return x.transpose(perm)
 

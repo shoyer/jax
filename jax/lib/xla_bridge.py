@@ -22,23 +22,21 @@ XLA. There are also a handful of related casting utilities.
 
 from functools import partial
 import os
-from typing import Callable, Dict
+from typing import Callable, Dict, Tuple, Union
 import warnings
 
 from absl import logging
-import numpy as np
 
 from ..config import flags
 from .. import util
 from .. import dtypes
-import numpy as onp  # 'onp' rather than 'np' to distinguish from autograd.numpy
+import numpy as np
 import threading
 
 try:
   from . import tpu_client
 except ImportError:
   tpu_client = None
-from . import version
 from . import xla_client
 
 xops = xla_client.ops
@@ -58,9 +56,14 @@ flags.DEFINE_string(
     'Platform name for XLA. The default is to attempt to use a GPU if '
     'available, but fall back to CPU otherwise. To set the platform manually, '
     'pass "cpu" for CPU or "gpu" for GPU.')
+flags.DEFINE_bool(
+    'jax_disable_most_optimizations', False,
+    'Try not to do much optimization work. This can be useful if the cost of '
+    'optimization is greater than that of running a less-optimized program.')
 
 
-def get_compile_options(num_replicas, num_partitions, device_assignment=None):
+def get_compile_options(num_replicas, num_partitions, device_assignment=None,
+                        use_spmd_partitioning=True):
   """Returns the compile options to use, as derived from flag values.
 
   Args:
@@ -70,16 +73,20 @@ def get_compile_options(num_replicas, num_partitions, device_assignment=None):
       logical replicas to physical devices (default inherited from
       xla_client.CompileOptions). Must be consistent with `num_replicas` and
       `num_partitions`.
+    use_spmd_partitioning: boolean indicating whether to enable SPMD or MPMD
+      partitioning in XLA.
   """
   compile_options = xla_client.CompileOptions()
   compile_options.num_replicas = num_replicas
   compile_options.num_partitions = num_partitions
+  build_options = compile_options.executable_build_options
+  build_options.use_spmd_partitioning = use_spmd_partitioning
   if device_assignment is not None:
     logging.vlog(
         2,
         'get_compile_options: num_replicas=%s num_partitions=%s device_assignment=%s',
         num_replicas, num_partitions, device_assignment)
-    device_assignment = onp.array(device_assignment)
+    device_assignment = np.array(device_assignment)
 
     # Allow 1D device assignment if num_partitions is 1.
     if (device_assignment.ndim == 1) and (num_partitions == 1):
@@ -97,6 +104,13 @@ def get_compile_options(num_replicas, num_partitions, device_assignment=None):
     assert device_assignment.replica_count() == num_replicas
     assert device_assignment.computation_count() == num_partitions
     compile_options.device_assignment = device_assignment
+
+  if FLAGS.jax_disable_most_optimizations:
+    debug_options = compile_options.executable_build_options.debug_options
+    debug_options.xla_backend_optimization_level = 0
+    debug_options.xla_llvm_disable_expensive_passes = True
+    debug_options.xla_test_all_input_layouts = False
+
   return compile_options
 
 _backends = {}
@@ -162,16 +176,17 @@ def get_device_backend(device=None):
   return get_backend(platform)
 
 
-def device_count(backend=None):
+def device_count(backend: str = None):
   """Returns the total number of devices.
 
-  On most platforms, this is the same as ``local_device_count()``. However, on
-  multi-host platforms, this will return the total number of devices across all
-  hosts.
+  On most platforms, this is the same as :py:func:`jax.local_device_count`.
+  However, on multi-host platforms, this will return the total number of devices
+  across all hosts.
 
   Args:
     backend: This is an experimental feature and the API is likely to change.
-      Optional, a string representing the xla backend. 'cpu', 'gpu', or 'tpu'.
+      Optional, a string representing the xla backend: ``'cpu'``, ``'gpu'``, or
+      ``'tpu'``.
 
   Returns:
     Number of devices.
@@ -179,22 +194,27 @@ def device_count(backend=None):
   return int(get_backend(backend).device_count())
 
 
-def local_device_count(backend=None):
+def local_device_count(backend: str =None):
   """Returns the number of devices on this host."""
   return int(get_backend(backend).local_device_count())
 
 
-def devices(backend=None):
-  """Returns a list of all devices.
+def devices(backend: str = None):
+  """Returns a list of all devices for a given backend.
 
-  Each device is represented by a subclass of Device (e.g. CpuDevice,
-  GpuDevice). The length of the returned list is equal to
-  ``device_count()``. Local devices can be identified by comparing
-  ``Device.host_id`` to ``host_id()``.
+  Each device is represented by a subclass of :class:`Device` (e.g.
+  :class:`CpuDevice`, :class:`GpuDevice`). The length of the returned list is
+  equal to ``device_count(backend)``. Local devices can be identified by comparing
+  :meth:`Device.host_id` to the value returned by :py:func:`jax.host_id`.
+
+  If ``backend`` is ``None``, returns all the devices from the default backend.
+  The default backend is generally ``'gpu'`` or ``'tpu'`` if available,
+  otherwise ``'cpu'``.
 
   Args:
     backend: This is an experimental feature and the API is likely to change.
-      Optional, a string representing the xla backend. 'cpu', 'gpu', or 'tpu'.
+      Optional, a string representing the xla backend: ``'cpu'``, ``'gpu'``, or
+      ``'tpu'``.
 
   Returns:
     List of Device subclasses.
@@ -202,14 +222,29 @@ def devices(backend=None):
   return get_backend(backend).devices()
 
 
-def local_devices(host_id=None, backend=None):
-  """Returns a list of devices local to a given host (this host by default)."""
+def local_devices(host_id: int = None, backend: str = None):
+  """Like :py:func:`jax.devices`, but only returns devices local to a given host.
+
+  If ``host_id`` is ``None``, returns devices local to this host.
+
+  Args:
+    host_id: the integer ID of the host. Host IDs can be retrieved via
+      :py:func:`jax.host_ids`.
+    backend: This is an experimental feature and the API is likely to change.
+      Optional, a string representing the xla backend: ``'cpu'``, ``'gpu'``, or
+      ``'tpu'``.
+
+  Returns:
+    List of Device subclasses.
+  """
   if host_id is None:
     host_id = get_backend(backend).host_id()
+  if host_id not in host_ids():
+    raise ValueError(f"Unknown host_id {host_id}")
   return [d for d in devices(backend) if d.host_id == host_id]
 
 
-def host_id(backend=None):
+def host_id(backend: str = None):
   """Returns the integer host ID of this host.
 
   On most platforms, this will always be 0. This will vary on multi-host
@@ -217,7 +252,8 @@ def host_id(backend=None):
 
   Args:
     backend: This is an experimental feature and the API is likely to change.
-      Optional, a string representing the xla backend. 'cpu', 'gpu', or 'tpu'.
+      Optional, a string representing the xla backend: ``'cpu'``, ``'gpu'``, or
+      ``'tpu'``.
 
   Returns:
     Integer host ID.
@@ -225,12 +261,12 @@ def host_id(backend=None):
   return get_backend(backend).host_id()
 
 
-def host_ids(backend=None):
+def host_ids(backend: str = None):
   """Returns a sorted list of all host IDs."""
   return sorted(list(set(d.host_id for d in devices(backend))))
 
 
-def host_count(backend=None):
+def host_count(backend: str = None):
   """Returns the number of hosts."""
   return len(host_ids(backend))
 
@@ -252,9 +288,8 @@ def supported_numpy_dtypes():
 # TODO(mattjj,frostig): try to remove this function
 def normalize_to_xla_dtypes(val):
   """Normalize dtypes in a value."""
-  if hasattr(val, '__array__') or onp.isscalar(val):
-    return onp.asarray(val,
-                       dtype=dtypes.canonicalize_dtype(dtypes.result_type(val)))
+  if hasattr(val, '__array__') or np.isscalar(val):
+    return np.asarray(val, dtype=dtypes.canonicalize_dtype(dtypes.result_type(val)))
   elif isinstance(val, (tuple, list)):
     return tuple(normalize_to_xla_dtypes(x) for x in val)
   raise TypeError('Can\'t convert to XLA: {}'.format(val))
@@ -292,6 +327,57 @@ def constant(builder, py_val, canonicalize_types=True):
   else:
     raise TypeError("No constant handler for type: {}".format(py_type))
 
+# HLO instructions optionally can be annotated to say how the output should be
+# spatially partitioned (represented in XLA as OpSharding protos, see
+# _sharding_to_proto). For array outputs, the annotation is either an int per
+# dimension specifying the number of ways that dimension divided (i.e. the total
+# number of shards is the product), or None to indicate the array should be
+# replicated. Tuple outputs are represented as tuples thereof. XLA supports
+# arbitrary tuple nesting, but JAX only uses one level of tupling (and our type
+# checkers don't support recursive types), so we only represent one level of
+# nesting in this type definition.
+SpatialSharding = Union[Tuple[int, ...],
+                        None,
+                        Tuple[Union[Tuple[int, ...], None], ...]]
+
+def _sharding_to_proto(sharding: SpatialSharding):
+  """Converts a SpatialSharding to an OpSharding.
+
+  See
+  https://github.com/tensorflow/tensorflow/blob/master/tensorflow/compiler/xla/xla_data.proto#L601
+  for details on the OpSharding proto.
+  """
+  proto = xla_client.OpSharding()
+  if isinstance(sharding, tuple) and not isinstance(sharding[0], int):
+      assert all(s is None or isinstance(s, tuple) for s in sharding)
+      sub_protos = [_sharding_to_proto(s) for s in sharding]  # type: ignore
+      proto.type = xla_client.OpSharding.Type.TUPLE
+      proto.tuple_shardings = sub_protos
+      return proto
+
+  if sharding is None:
+    proto.type = xla_client.OpSharding.Type.REPLICATED
+  else:
+    proto.type = xla_client.OpSharding.Type.OTHER
+    proto.tile_assignment_dimensions = list(sharding)
+    proto.tile_assignment_devices = list(range(np.product(sharding)))
+  return proto
+
+def set_sharding(builder, op, sharding: SpatialSharding):
+  """Uses CustomCall to annotate a value as sharded."""
+  # "Sharding" is a built-in custom call target that acts like an identity
+  # function, and is used to attach an OpSharding to.
+  return with_sharding(builder, sharding, xops.CustomCall,
+                       builder, b"Sharding", [op], builder.get_shape(op))
+
+def with_sharding(builder, sharding: SpatialSharding, op_fn, *args, **kwargs):
+  """Builds op_fn(*args, **kwargs) with sharding annotation."""
+  builder.set_sharding(_sharding_to_proto(sharding))
+  try:
+    return op_fn(*args, **kwargs)
+  finally:
+    builder.clear_sharding()
+
 def make_computation_builder(name):
   return xla_client.XlaBuilder(name)
 
@@ -308,7 +394,7 @@ def _ndarray_constant_handler(c, val, canonicalize_types=True):
   special handling of arrays with any strides of size zero: for those, it
   generates appropriate calls to NumpyArrayConstant, Broadcast, and Transpose
   to avoid staging in large literals that might arise from np.zeros or np.ones
-  or the output of lax.broadcast (which uses onp.broadcast_to which in turn
+  or the output of lax.broadcast (which uses np.broadcast_to which in turn
   uses size-zero strides).
 
   Args:
@@ -320,28 +406,28 @@ def _ndarray_constant_handler(c, val, canonicalize_types=True):
     staged into the XLA Computation.
   """
   # TODO(mattjj): revise this to use xops.BroadcastInDim rather than Transpose
-  if onp.any(onp.equal(0, val.strides)) and val.size > 0:
-    zero_stride_axes, = onp.where(onp.equal(0, val.strides))
-    other_axes, = onp.where(onp.not_equal(0, val.strides))
+  if np.any(np.equal(0, val.strides)) and val.size > 0:
+    zero_stride_axes, = np.where(np.equal(0, val.strides))
+    other_axes, = np.where(np.not_equal(0, val.strides))
     collapsed_val = val[tuple(0 if ax in zero_stride_axes else slice(None)
                               for ax in range(val.ndim))]
     xla_val = xops.Broadcast(
         _numpy_array_constant(c, collapsed_val, canonicalize_types),
-        onp.take(val.shape, zero_stride_axes))
-    permutation = onp.argsort(tuple(zero_stride_axes) + tuple(other_axes))
+        np.take(val.shape, zero_stride_axes))
+    permutation = np.argsort(tuple(zero_stride_axes) + tuple(other_axes))
     return xops.Transpose(xla_val, permutation)
   else:
     return _numpy_array_constant(c, val, canonicalize_types)
-register_constant_handler(onp.ndarray, _ndarray_constant_handler)
+register_constant_handler(np.ndarray, _ndarray_constant_handler)
 
 
 def _scalar_constant_handler(c, val, canonicalize_types=True):
   return _numpy_array_constant(c, val, canonicalize_types)
 
-for scalar_type in [onp.int8, onp.int16, onp.int32, onp.int64,
-                    onp.uint8, onp.uint16, onp.uint32, onp.uint64,
-                    onp.float16, onp.float32, onp.float64, onp.float128,
-                    onp.bool_, onp.longlong]:
+for scalar_type in [np.int8, np.int16, np.int32, np.int64,
+                    np.uint8, np.uint16, np.uint32, np.uint64,
+                    np.float16, np.float32, np.float64, np.float128,
+                    np.bool_, np.longlong]:
   register_constant_handler(scalar_type, _scalar_constant_handler)
 
 def _python_scalar_handler(dtype, c, val, canonicalize_dtypes=True):

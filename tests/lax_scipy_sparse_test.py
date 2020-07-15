@@ -23,11 +23,8 @@ from jax import jit
 import jax.numpy as jnp
 from jax import lax
 from jax import test_util as jtu
+from jax.tree_util import register_pytree_node_class
 import jax.scipy.sparse.linalg
-from jax.config import config
-
-
-config.parse_flags_with_absl()
 
 from jax.config import config
 config.parse_flags_with_absl()
@@ -96,7 +93,6 @@ class LaxBackedScipyTests(jtu.JaxTestCase):
         partial(scipy_cg, M=M, maxiter=1),
         partial(lax_cg, M=M, maxiter=1),
         args_maker,
-        check_dtypes=True,
         tol=1e-3)
 
     # TODO(shoyer,mattjj): I had to loosen the tolerance for complex64[7,7]
@@ -105,14 +101,12 @@ class LaxBackedScipyTests(jtu.JaxTestCase):
         partial(scipy_cg, M=M, maxiter=3),
         partial(lax_cg, M=M, maxiter=3),
         args_maker,
-        check_dtypes=True,
         tol=3e-3)
 
     self._CheckAgainstNumpy(
         np.linalg.solve,
         partial(lax_cg, M=M, atol=1e-6),
         args_maker,
-        check_dtypes=True,
         tol=2e-2)
 
   @parameterized.named_parameters(jtu.cases_from_list(
@@ -129,10 +123,10 @@ class LaxBackedScipyTests(jtu.JaxTestCase):
 
     expected = np.linalg.solve(posify(a), b)
     actual = lax_cg(posify(a), b)
-    self.assertAllClose(expected, actual, check_dtypes=True)
+    self.assertAllClose(expected, actual)
 
     actual = jit(lax_cg)(posify(a), b)
-    self.assertAllClose(expected, actual, check_dtypes=True)
+    self.assertAllClose(expected, actual)
 
     # numerical gradients are only well defined if ``a`` is guaranteed to be
     # positive definite.
@@ -145,7 +139,7 @@ class LaxBackedScipyTests(jtu.JaxTestCase):
     b = jnp.arange(9.0).reshape((3, 3))
     expected = b / 2
     actual, _ = jax.scipy.sparse.linalg.cg(A, b)
-    self.assertAllClose(expected, actual, check_dtypes=True)
+    self.assertAllClose(expected, actual)
 
   def test_cg_pytree(self):
     A = lambda x: {"a": x["a"] + 0.5 * x["b"], "b": 0.5 * x["a"] + x["b"]}
@@ -158,12 +152,32 @@ class LaxBackedScipyTests(jtu.JaxTestCase):
 
   def test_cg_errors(self):
     A = lambda x: x
-    b = jnp.zeros((2, 1))
-    x0 = jnp.zeros((2,))
+    b = jnp.zeros((2,))
+    with self.assertRaisesRegex(
+        ValueError, "x0 and b must have matching tree structure"):
+      jax.scipy.sparse.linalg.cg(A, {'x': b}, {'y': b})
     with self.assertRaisesRegex(
         ValueError, "x0 and b must have matching shape"):
-      jax.scipy.sparse.linalg.cg(A, b, x0)
+      jax.scipy.sparse.linalg.cg(A, b, b[:, np.newaxis])
+
+  def test_cg_without_pytree_equality(self):
+
+    @register_pytree_node_class
+    class MinimalPytree:
+      def __init__(self, value):
+        self.value = value
+      def tree_flatten(self):
+        return [self.value], None
+      @classmethod
+      def tree_unflatten(cls, aux_data, children):
+        return cls(*children)
+
+    A = lambda x: MinimalPytree(2 * x.value)
+    b = MinimalPytree(jnp.arange(5.0))
+    expected = b.value / 2
+    actual, _ = jax.scipy.sparse.linalg.cg(A, b)
+    self.assertAllClose(expected, actual.value)
 
 
 if __name__ == "__main__":
-  absltest.main()
+  absltest.main(testLoader=jtu.JaxTestLoader())

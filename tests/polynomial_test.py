@@ -25,19 +25,19 @@ from jax.config import config
 config.parse_flags_with_absl()
 
 
-float_dtypes = [np.float32, np.float64]
-# implementation casts to complex64.
-complex_dtypes = [np.complex64]
-inexact_dtypes = float_dtypes + complex_dtypes
-int_dtypes = [np.int32, np.int64]
-real_dtypes = float_dtypes + int_dtypes
-all_dtypes = real_dtypes + complex_dtypes
+all_dtypes = jtu.dtypes.floating + jtu.dtypes.integer + jtu.dtypes.complex
 
 
 # TODO: these tests fail without fixed PRNG seeds.
 
 
 class TestPolynomial(jtu.JaxTestCase):
+
+  def testNotImplemented(self):
+    for name in jnp.polynomial._NOT_IMPLEMENTED:
+      func = getattr(jnp.polynomial, name)
+      with self.assertRaises(NotImplementedError):
+        func()
 
   @parameterized.named_parameters(jtu.cases_from_list(
     {"testcase_name": "_dtype={}_leading={}_trailing={}".format(
@@ -132,6 +132,7 @@ class TestPolynomial(jtu.JaxTestCase):
     for rng_factory in [jtu.rand_default]
     for zeros in [1, 2, 5]
     for nonzeros in [0, 3]))
+  @jtu.skip_on_devices("gpu")
   def testRootsInvalid(self, zeros, nonzeros, dtype, rng_factory):
     rng = rng_factory(np.random.RandomState(0))
 
@@ -149,4 +150,4 @@ class TestPolynomial(jtu.JaxTestCase):
 
 
 if __name__ == "__main__":
-  absltest.main()
+  absltest.main(testLoader=jtu.JaxTestLoader())

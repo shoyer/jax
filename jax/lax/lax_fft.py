@@ -15,7 +15,7 @@
 
 from functools import partial
 
-import numpy as onp
+import numpy as np
 
 from jax.abstract_arrays import ShapedArray
 from jax.api import jit, vjp
@@ -23,6 +23,7 @@ from jax.core import Primitive
 from jax.interpreters import xla
 from jax.util import prod
 from . import dtypes, lax
+from .. import lib
 from ..lib import xla_client
 from ..interpreters import ad
 from ..interpreters import batching
@@ -35,22 +36,24 @@ __all__ = [
 ]
 
 def _promote_to_complex(arg):
-  dtype = onp.result_type(arg, onp.complex64)
-  # XLA's FFT op only supports C64.
-  if dtype == onp.complex128:
-    dtype = onp.complex64
+  dtype = dtypes.result_type(arg, np.complex64)
+  # XLA's FFT op only supports C64 in jaxlib versions 0.1.47 and earlier.
+  # TODO(phawkins): remove when minimum jaxlib version is 0.1.48 or newer.
+  if lib.version <= (0, 1, 47) and dtype == np.complex128:
+    dtype = np.complex64
   return lax.convert_element_type(arg, dtype)
 
 def _promote_to_real(arg):
-  dtype = onp.result_type(arg, onp.float64)
+  dtype = dtypes.result_type(arg, np.float32)
   # XLA's FFT op only supports F32.
-  if dtype == onp.float64:
-    dtype = onp.float32
+  # TODO(phawkins): remove when minimum jaxlib version is 0.1.48 or newer.
+  if lib.version <= (0, 1, 47) and dtype == np.float64:
+    dtype = np.float32
   return lax.convert_element_type(arg, dtype)
 
 def fft(x, fft_type, fft_lengths):
   if fft_type == xla_client.FftType.RFFT:
-    if onp.iscomplexobj(x):
+    if np.iscomplexobj(x):
       raise ValueError("only real valued inputs supported for rfft")
     x = _promote_to_real(x)
   else:
@@ -64,8 +67,8 @@ def fft(x, fft_type, fft_lengths):
 def fft_impl(x, fft_type, fft_lengths):
   return xla.apply_primitive(fft_p, x, fft_type=fft_type, fft_lengths=fft_lengths)
 
-_complex_dtype = lambda dtype: (onp.zeros((), dtype) + onp.zeros((), onp.complex64)).dtype
-_real_dtype = lambda dtype: onp.zeros((), dtype).real.dtype
+_complex_dtype = lambda dtype: (np.zeros((), dtype) + np.zeros((), np.complex64)).dtype
+_real_dtype = lambda dtype: np.zeros((), dtype).real.dtype
 _is_even = lambda x: x % 2 == 0
 
 def fft_abstract_eval(x, fft_type, fft_lengths):
@@ -142,4 +145,3 @@ fft_p.def_abstract_eval(fft_abstract_eval)
 xla.translations[fft_p] = fft_translation_rule
 ad.deflinear(fft_p, fft_transpose_rule)
 batching.primitive_batchers[fft_p] = fft_batching_rule
-

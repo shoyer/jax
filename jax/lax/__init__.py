@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# flake8: noqa: F401
 from .lax import (
   ConvDimensionNumbers,
   DotDimensionNumbers,
@@ -33,6 +34,10 @@ from .lax import (
   after_all,
   after_all_p,
   and_p,
+  argmax,
+  argmax_p,
+  argmin,
+  argmin_p,
   asin,
   asinh,
   asinh_p,
@@ -89,6 +94,10 @@ from .lax import (
   cosh_p,
   create_token,
   create_token_p,
+  cummax,
+  cummax_p,
+  cummin,
+  cummin_p,
   cumprod,
   cumprod_p,
   cumsum,
@@ -120,6 +129,7 @@ from .lax import (
   erfc_p,
   exp,
   exp_p,
+  expand_dims,
   expm1,
   expm1_p,
   floor,
@@ -144,6 +154,8 @@ from .lax import (
   index_take,
   infeed,
   infeed_p,
+  integer_pow,
+  integer_pow_p,
   iota,
   is_finite,
   is_finite_p,
@@ -186,6 +198,8 @@ from .lax import (
   pow,
   pow_p,
   prod,
+  random_gamma_grad,
+  random_gamma_grad_p,
   real,
   real_p,
   reciprocal,
@@ -248,11 +262,12 @@ from .lax import (
   slice_p,
   sort,
   sort_key_val,
-  sort_key_val_p,
   sort_p,
   sqrt,
   sqrt_p,
   square,
+  squeeze,
+  squeeze_p,
   standard_abstract_eval,
   standard_naryop,
   standard_primitive,
@@ -282,7 +297,7 @@ from .lax import (_reduce_sum, _reduce_max, _reduce_min, _reduce_or,
                   _const, _eq_meet, _broadcasting_select,
                   _check_user_dtype_supported, _one, _const,
                   _upcast_fp16_for_computation, _broadcasting_shape_rule,
-                  _eye, _tri, _delta, _ones, _zeros)
+                  _eye, _tri, _delta, _ones, _zeros, _canonicalize_axis)
 from .lax_control_flow import (
   cond,
   cond_p,
@@ -294,8 +309,10 @@ from .lax_control_flow import (
   scan,
   scan_bind,
   scan_p,
+  switch,
   while_loop,
   while_p,
+  associative_scan,
 )
 from .lax_fft import (
   fft,

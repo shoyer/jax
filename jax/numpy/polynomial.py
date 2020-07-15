@@ -19,8 +19,10 @@ from . import lax_numpy as jnp
 
 from jax import jit
 from ._util import _wraps
+from .lax_numpy import _not_implemented
 from .linalg import eigvals as _eigvals
 from .. import ops as jaxops
+from ..util import get_module_functions
 
 
 def _to_inexact_type(type):
@@ -54,16 +56,16 @@ def _nonzero_range(arr):
 
 @_wraps(np.roots, lax_description="""\
 If the input polynomial coefficients of length n do not start with zero,
-the polynomial is of degree n - 1 leading to n - 1 roots. 
+the polynomial is of degree n - 1 leading to n - 1 roots.
 If the coefficients do have leading zeros, the polynomial they define
-has a smaller degree and the number of roots (and thus the output shape) 
+has a smaller degree and the number of roots (and thus the output shape)
 is value dependent.
 
 The general implementation can therefore not be transformed with jit.
-If the coefficients are guaranteed to have no leading zeros, use the 
+If the coefficients are guaranteed to have no leading zeros, use the
 keyword argument `strip_zeros=False` to get a jit-compatible variant::
 
-    >>> roots_unsafe = jax.jit(jax.partial(jnp.roots, strip_zeros=False))
+    >>> roots_unsafe = jax.jit(functools.partial(jnp.roots, strip_zeros=False))
     >>> roots_unsafe([1, 2])     # ok
     DeviceArray([-2.+0.j], dtype=complex64)
     >>> roots_unsafe([0, 1, 2])  # problem
@@ -102,3 +104,10 @@ def roots(p, *, strip_zeros=True):
     # combine roots and zero roots
     roots = jnp.hstack((roots, jnp.zeros(trailing_zeros, p.dtype)))
     return roots
+
+
+_NOT_IMPLEMENTED = []
+for name, func in get_module_functions(np.polynomial).items():
+  if name not in globals():
+    _NOT_IMPLEMENTED.append(name)
+    globals()[name] = _not_implemented(func)

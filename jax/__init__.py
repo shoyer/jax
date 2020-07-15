@@ -12,13 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from jax.version import __version__
+# Set default logging level before any logging happens.
+import os as _os
+_os.environ.setdefault('TF_CPP_MIN_LOG_LEVEL', '1')
+del _os
+
+# flake8: noqa: F401
 from .config import config
 from .api import (
   ad,  # TODO(phawkins): update users to avoid this.
   argnums_partial,  # TODO(phawkins): update Haiku to not use this.
   checkpoint,
   curry,  # TODO(phawkins): update users to avoid this.
+  custom_ivjp,
   custom_gradient,
   custom_jvp,
   custom_vjp,
@@ -39,6 +45,7 @@ from .api import (
   host_count,
   host_id,
   host_ids,
+  invertible,
   jacobian,
   jacfwd,
   jacrev,
@@ -73,16 +80,18 @@ from .api import (
   xla,  # TODO(phawkins): update users to avoid this.
   xla_computation,
 )
-from jax import nn
-from jax import random
+from .version import __version__
 
-
+# These submodules are separate because they are in an import cycle with
+# jax and rely on the names imported above.
+from . import image
+from . import lax
+from . import nn
+from . import profiler
+from . import random
 
 def _init():
-  import os
-  os.environ.setdefault('TF_CPP_MIN_LOG_LEVEL', '1')
-
-  import jax.numpy # side-effecting import sets up operator overloads
+  from . import numpy # side-effecting import sets up operator overloads
 
 _init()
 del _init

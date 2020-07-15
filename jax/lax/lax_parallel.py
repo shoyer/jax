@@ -17,7 +17,7 @@ Parallelization primitives.
 
 import collections
 
-import numpy as onp
+import numpy as np
 
 from jax import core
 from jax import ad_util
@@ -44,10 +44,12 @@ def psum(x, axis_name, *, axis_index_groups=None):
   If ``x`` is a pytree then the result is equivalent to mapping this function to
   each leaf in the tree.
 
+  Inputs of boolean dtype are converted to integers before the reduction.
+
   Args:
     x: array(s) with a mapped axis named ``axis_name``.
     axis_name: hashable Python object used to name a pmapped axis (see the
-      ``pmap`` docstring for more details).
+      :func:`jax.pmap` documentation for more details).
     axis_index_groups: optional list of lists containing axis indices (e.g. for
       an axis of size 4, [[0, 1], [2, 3]] would perform psums over the first
       two and last two replicas). Groups must cover all axis indices exactly
@@ -68,10 +70,13 @@ def psum(x, axis_name, *, axis_index_groups=None):
   >>> print(y)
   [ 0.          0.16666667  0.33333334  0.5       ]
   """
-  leaves, treedef = tree_util.tree_flatten(x)
   _validate_axis_index_groups(axis_index_groups)
-  return treedef.unflatten(
-      psum_p.bind(*leaves, axis_name=axis_name, axis_index_groups=axis_index_groups))
+  leaves, treedef = tree_util.tree_flatten(x)
+  leaves = [lax.convert_element_type(l, np.int32)
+            if dtypes.dtype(l) == np.bool_ else l for l in leaves]
+  out_flat = psum_p.bind(*leaves, axis_name=axis_name,
+                         axis_index_groups=axis_index_groups)
+  return tree_util.tree_unflatten(treedef, out_flat)
 
 def pmean(x, axis_name, *, axis_index_groups=None):
   """Compute an all-reduce mean on ``x`` over the pmapped axis ``axis_name``.
@@ -82,7 +87,7 @@ def pmean(x, axis_name, *, axis_index_groups=None):
   Args:
     x: array(s) with a mapped axis named ``axis_name``.
     axis_name: hashable Python object used to name a pmapped axis (see the
-      ``pmap`` docstring for more details).
+      :func:`jax.pmap` documentation for more details).
     axis_index_groups: optional list of lists containing axis indices (e.g. for
       an axis of size 4, [[0, 1], [2, 3]] would perform pmeans over the first
       two and last two replicas). Groups must cover all axis indices exactly
@@ -102,7 +107,8 @@ def pmean(x, axis_name, *, axis_index_groups=None):
   >>> print(y)
   [ 0.          0.66666667  1.33333334  2.0       ]
   """
-  x, n = psum((x, 1), axis_name=axis_name, axis_index_groups=axis_index_groups)
+  x = psum(x, axis_name=axis_name, axis_index_groups=axis_index_groups)
+  n = psum(1, axis_name=axis_name, axis_index_groups=axis_index_groups)
   return tree_util.tree_map(lambda v: v / n, x)
 
 def pmax(x, axis_name, *, axis_index_groups=None):
@@ -114,7 +120,7 @@ def pmax(x, axis_name, *, axis_index_groups=None):
   Args:
     x: array(s) with a mapped axis named ``axis_name``.
     axis_name: hashable Python object used to name a pmapped axis (see the
-      ``pmap`` docstring for more details).
+      :func:`jax.pmap` documentation for more details).
     axis_index_groups: optional list of lists containing axis indices (e.g. for
       an axis of size 4, [[0, 1], [2, 3]] would perform pmaxes over the first
       two and last two replicas). Groups must cover all axis indices exactly
@@ -137,7 +143,7 @@ def pmin(x, axis_name, *, axis_index_groups=None):
   Args:
     x: array(s) with a mapped axis named ``axis_name``.
     axis_name: hashable Python object used to name a pmapped axis (see the
-      ``pmap`` docstring for more details).
+      :func:`jax.pmap` documentation for more details).
     axis_index_groups: optional list of lists containing axis indices (e.g. for
       an axis of size 4, [[0, 1], [2, 3]] would perform pmins over the first
       two and last two replicas). Groups must cover all axis indices exactly
@@ -172,8 +178,9 @@ def ppermute(x, axis_name, perm):
   Args:
     x: array(s) with a mapped axis named ``axis_name``.
     axis_name: hashable Python object used to name a pmapped axis (see the
-      ``pmap`` docstring for more details).
-    perm: list of pairs of ints, representing (source_index, destination_index)
+      :func:`jax.pmap` documentation for more details).
+    perm: list of pairs of ints, representing
+      ``(source_index, destination_index)``
       pairs that encode how the mapped axis named ``axis_name`` should be
       shuffled. The integer values are treated as indices into the mapped axis
       ``axis_name``. Any two pairs should not have the same source index or the
@@ -189,29 +196,26 @@ def ppermute(x, axis_name, perm):
       partial(ppermute_p.bind, axis_name=axis_name, perm=tuple(perm)), x)
 
 def pshuffle(x, axis_name, perm):
-  """Perform a collective shuffle according to the permutation ``perm``.
+  """Convenience wrapper of jax.lax.ppermute with alternate permutation encoding
 
   If ``x`` is a pytree then the result is equivalent to mapping this function to
   each leaf in the tree.
 
-  This function is a simple wrapper around jax.lax.ppermute.
-
   Args:
     x: array(s) with a mapped axis named ``axis_name``.
     axis_name: hashable Python object used to name a pmapped axis (see the
-      ``pmap`` docstring for more details).
-    perm: list of of ints, representing the new order of the source indices
-      that encode how the mapped axis named ``axis_name`` should be
-      shuffled. The integer values are treated as indices into the mapped axis
-      ``axis_name``. Every int between 0 and ``len(perm)-1`` should be included.
+      :func:`jax.pmap` documentation for more details).
+    perm: list of of ints encoding sources for the permutation to be applied to
+      the axis named ``axis_name``, so that the output at axis index i
+      comes from the input at axis index perm[i]. Every integer in [0, N) should
+      be included exactly once for axis size N.
 
   Returns:
     Array(s) with the same shape as ``x`` with slices along the axis
     ``axis_name`` gathered from ``x`` according to the permutation ``perm``.
   """
   if set(perm) != set(range(len(perm))):
-    raise AssertionError(
-      "Given `perm` does not represent a real permutation: {}".format(perm))
+    raise ValueError(f"`perm` does not represent a permutation: {perm}")
   return ppermute(x, axis_name, list(zip(perm, range(len(perm)))))
 
 
@@ -231,7 +235,7 @@ def pswapaxes(x, axis_name, axis):
   Args:
     x: array(s) with a mapped axis named ``axis_name``.
     axis_name: hashable Python object used to name a pmapped axis (see the
-      ``pmap`` docstring for more details).
+      :func:`jax.pmap` documentation for more details).
     axis: int indicating the unmapped axis of ``x`` to map with the name
       ``axis_name``.
 
@@ -258,7 +262,7 @@ def all_to_all(x, axis_name, split_axis, concat_axis):
   Args:
     x: array(s) with a mapped axis named ``axis_name``.
     axis_name: hashable Python object used to name a pmapped axis (see the
-      ``pmap`` docstring for more details).
+      :func:`jax.pmap` documentation for more details).
     split_axis: int indicating the unmapped axis of ``x`` to map with the name
       ``axis_name``.
     concat_axis: int indicating the position in the output to materialize the
@@ -266,6 +270,7 @@ def all_to_all(x, axis_name, split_axis, concat_axis):
 
   Returns:
     Array(s) with shape given by the expression::
+
       np.insert(np.delete(x.shape, split_axis), concat_axis, axis_size)
 
     where ``axis_size`` is the size of the mapped axis named ``axis_name`` in
@@ -322,7 +327,7 @@ def _psum_translation_rule(c, *args, replica_groups=None, platform=None):
   out = [None] * len(args)
   replica_groups_protos = xc.make_replica_groups(replica_groups)
   for dtype, (indices, dtype_args) in sorted(args_by_type.items()):
-    is_complex = dtypes.issubdtype(dtype, onp.complexfloating)
+    is_complex = dtypes.issubdtype(dtype, np.complexfloating)
     n = len(dtype_args)
     if is_complex:
       dtype_args = ([xops.Real(x) for x in dtype_args] +
@@ -350,20 +355,26 @@ def _notuple_psum_translation_rule(c, *args, replica_groups):
     psum = partial(_allreduce_translation_rule, lax.add_p, c,
                    replica_groups=replica_groups)
     dtype = c.get_shape(val).numpy_dtype()
-    if dtypes.issubdtype(dtype, onp.complexfloating):
+    if dtypes.issubdtype(dtype, np.complexfloating):
       return xops.Complex(psum(xops.Real(val)), psum(xops.Imag(val)))
     else:
       return psum(val)
   return xops.Tuple(c, list(map(_translate, args)))
 
+def _psum_transpose_rule(cts, axis_name, axis_index_groups):
+  nonzero_out_cts, treedef = tree_util.tree_flatten(cts)
+  nonzero_in_cts = psum_p.bind(*nonzero_out_cts, axis_name=axis_name,
+                               axis_index_groups=axis_index_groups)
+  return tree_util.tree_unflatten(treedef, nonzero_in_cts)
+
 psum_p = standard_pmap_primitive('psum', multiple_results=True)
-psum_p.def_abstract_eval(lambda *args, **params: map(raise_to_shaped, args))
+psum_p.def_abstract_eval(
+    lambda *args, **params: tuple(map(raise_to_shaped, args)))
 pxla.split_axis_rules[psum_p] = \
     partial(_allreduce_split_axis_rule, psum_p, lax._reduce_sum)
 xla.parallel_translations[psum_p] = _psum_translation_rule
 pxla.parallel_pure_rules[psum_p] = lambda *args, shape: (x * prod(shape) for x in args)
-ad.deflinear(psum_p, lambda ts, axis_name, axis_index_groups: psum_p.bind(
-    *ts, axis_name=axis_name, axis_index_groups=axis_index_groups))
+ad.deflinear(psum_p, _psum_transpose_rule)
 pxla.multi_host_supported_collectives.add(psum_p)
 
 
@@ -430,6 +441,9 @@ def _all_to_all_split_axis_rule(vals, which_mapped, split_axis, concat_axis,
   out = _moveaxis(1, concat_axis + 1, out)
   return out, True
 
+def _all_to_all_transpose_rule(cts, axis_name, split_axis, concat_axis):
+  return (all_to_all(cts, axis_name=axis_name, split_axis=concat_axis, concat_axis=split_axis),)
+
 def _moveaxis(src, dst, x):
   perm = [i for i in range(x.ndim) if i != src]
   perm.insert(dst, src)
@@ -438,6 +452,7 @@ def _moveaxis(src, dst, x):
 all_to_all_p = standard_pmap_primitive('all_to_all')
 xla.parallel_translations[all_to_all_p] = _all_to_all_translation_rule
 pxla.split_axis_rules[all_to_all_p] = _all_to_all_split_axis_rule
+ad.deflinear(all_to_all_p, _all_to_all_transpose_rule)
 
 
 ### papply rules
@@ -470,7 +485,7 @@ def all_gather(x, axis_name):
   Args:
     x: array(s) with a mapped axis named ``axis_name``.
     axis_name: hashable Python object used to name a pmapped axis (see the
-      ``pmap`` docstring for more details).
+      :func:`jax.pmap` documentation for more details).
 
   Returns:
     Array(s) representing the result of an all-gather along the axis
@@ -496,14 +511,14 @@ def _broadcasting_papply(prim, name, size, vals, axes, **params):
   if xdim is None:
     if x.shape:
       if x.shape[ydim] == 1:
-        x = x.reshape(onp.delete(x.shape, ydim))
+        x = x.reshape(np.delete(x.shape, ydim))
       else:
         x = _drop(x, ydim, name)
     return prim.bind(x, y, **params), ydim
   elif ydim is None:
     if y.shape:
       if y.shape[xdim] == 1:
-        y = y.reshape(onp.delete(y.shape, xdim))
+        y = y.reshape(np.delete(y.shape, xdim))
       else:
         y = _drop(y, xdim, name)
     return prim.bind(x, y, **params), xdim
@@ -514,11 +529,11 @@ def _broadcasting_papply(prim, name, size, vals, axes, **params):
     y_tosplit = xdim - int(ydim <= xdim)
     if y.shape[y_tosplit] == 1:
       y = _allgather(y, ydim, size, name)
-      y = y.reshape(onp.delete(y.shape, xdim))
+      y = y.reshape(np.delete(y.shape, xdim))
       return prim.bind(x, y, **params), ydim
     elif x.shape[x_tosplit] == 1:
       x = _allgather(x, xdim, size, name)
-      x = x.reshape(onp.delete(x.shape, ydim))
+      x = x.reshape(np.delete(x.shape, ydim))
       return prim.bind(x, y, **params), ydim
     else:
       x = all_to_all(x, name, x_tosplit, xdim)
@@ -554,7 +569,7 @@ def _reducer_papply(prim, collective, name, size, vals, papply_axes, axes, **kwa
   if not axes or papply_axis in axes:
     return collective(result, axis_name=name), None
   else:
-    new_papply_axis = papply_axis - onp.sum(onp.less(other_axes, papply_axis))
+    new_papply_axis = papply_axis - np.sum(np.less(other_axes, papply_axis))
     return result, new_papply_axis
 
 def _defreducer(prim, collective_prim):
@@ -743,13 +758,13 @@ def _dot_general_papply_rule(name, size, vals, dims, dimension_numbers,
 def _reshape_papply_rule(name, size, vals, axes, new_sizes, dimensions):
   operand, = vals
   axis, = axes
-  old_sizes = tuple(onp.insert(operand.shape, axis, size))
+  old_sizes = tuple(np.insert(operand.shape, axis, size))
 
   def filter_ones(xs):
     return filter(lambda x: x != 1, xs)
 
   def find_new_axis(old_axis, old_sizes, new_sizes):
-    left = onp.prod(old_sizes[:old_axis])
+    left = np.prod(old_sizes[:old_axis])
     size = old_sizes[old_axis]
     prod = 1
     for i, cur_sz in enumerate(new_sizes):
@@ -818,7 +833,7 @@ def _conv_general_dilated_papply_rule(
   lhs_dim, rhs_dim = dims
   lhs_spec_batch_dim = dimension_numbers.lhs_spec[0]
   if rhs_dim is None and lhs_dim == lhs_spec_batch_dim:
-    lhs = lax.reshape(lhs, tuple(onp.insert(lhs.shape, lhs_dim, 1)))
+    lhs = lax.reshape(lhs, tuple(np.insert(lhs.shape, lhs_dim, 1)))
     out = lax.conv_general_dilated(
         lhs, rhs, window_strides, padding, lhs_dilation, rhs_dilation,
         dimension_numbers, feature_group_count, precision)
@@ -837,8 +852,8 @@ def _broadcast_in_dim_papply_rule(name, size, vals, dims, shape,
     raise ValueError(
         "broadcast_in_dim changes hidden dimension size: {} to {}".format(
             shape[dim], shape[out_dim]))
-  sub_bdims = tuple(onp.delete(broadcast_dimensions, dim))
-  sub_shape = tuple(onp.delete(shape, out_dim))
+  sub_bdims = tuple(np.delete(broadcast_dimensions, dim))
+  sub_shape = tuple(np.delete(shape, out_dim))
   return lax.broadcast_in_dim(operand, sub_shape, sub_bdims), out_dim
 
 
@@ -895,8 +910,8 @@ def _gather_papply_rule(
         start_index_map=dimension_numbers.start_index_map)
     out = lax.gather(operand, start_indices, dimension_numbers=dnums,
                      slice_sizes=slice_sizes)
-    out_dim = start_indices_dim + onp.sum(
-        onp.less_equal(offset_dims, start_indices_dim))
+    out_dim = start_indices_dim + np.sum(
+        np.less_equal(offset_dims, start_indices_dim))
     return out, out_dim
   else:
     raise NotImplementedError

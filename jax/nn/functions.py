@@ -20,6 +20,7 @@ import numpy as np
 from jax import custom_jvp
 from jax import dtypes
 from jax import lax
+from jax import core
 from jax.scipy.special import expit
 import jax.numpy as jnp
 
@@ -67,15 +68,17 @@ def sigmoid(x):
   """
   return expit(x)
 
-def swish(x):
-  r"""Swish activation function.
+def silu(x):
+  r"""SiLU activation function.
 
   Computes the element-wise function:
 
   .. math::
-    \mathrm{swish}(x) = x \cdot \mathrm{sigmoid}(x) = \frac{x}{1 + e^{-x}}
+    \mathrm{silu}(x) = x \cdot \mathrm{sigmoid}(x) = \frac{x}{1 + e^{-x}}
   """
   return x * sigmoid(x)
+
+swish = silu
 
 def log_sigmoid(x):
   r"""Log-sigmoid activation function.
@@ -95,7 +98,7 @@ def elu(x, alpha=1.0):
   .. math::
     \mathrm{elu}(x) = \begin{cases}
       x, & x > 0\\
-      \alpha \exp(x - 1), & x \le 0
+      \alpha \left(\exp(x) - 1\right), & x \le 0
     \end{cases}
   """
   safe_x = jnp.where(x > 0, 0., x)
@@ -138,7 +141,7 @@ def celu(x, alpha=1.0):
   .. math::
     \mathrm{celu}(x) = \begin{cases}
       x, & x > 0\\
-      \alpha \exp(\frac{x}{\alpha} - 1), & x \le 0
+      \alpha \left(\exp(\frac{x}{\alpha}) - 1\right), & x \le 0
     \end{cases}
 
   For more information, see
@@ -182,10 +185,7 @@ def gelu(x):
   <https://arxiv.org/abs/1606.08415>`_, section 2.
   """
   sqrt_2_over_pi = np.sqrt(2 / np.pi).astype(x.dtype)
-  # Does not use the power operator here.
-  # See https://github.com/google/jax/pull/3036
-  x_cubed = x * x * x
-  cdf = 0.5 * (1.0 + jnp.tanh(sqrt_2_over_pi * (x + 0.044715 * x_cubed)))
+  cdf = 0.5 * (1.0 + jnp.tanh(sqrt_2_over_pi * (x + 0.044715 * (x ** 3))))
   return x * cdf
 
 def glu(x, axis=-1):
@@ -211,7 +211,7 @@ def log_softmax(x, axis=-1):
     axis: the axis or axes along which the :code:`log_softmax` should be
       computed. Either an integer or a tuple of integers.
   """
-  shifted = x - x.max(axis, keepdims=True)
+  shifted = x - lax.stop_gradient(x.max(axis, keepdims=True))
   return shifted - jnp.log(jnp.sum(jnp.exp(shifted), axis, keepdims=True))
 
 def softmax(x, axis=-1):
@@ -228,7 +228,7 @@ def softmax(x, axis=-1):
       softmax output summed across these dimensions should sum to :math:`1`.
       Either an integer or a tuple of integers.
   """
-  unnormalized = jnp.exp(x - x.max(axis, keepdims=True))
+  unnormalized = jnp.exp(x - lax.stop_gradient(x.max(axis, keepdims=True)))
   return unnormalized / unnormalized.sum(axis, keepdims=True)
 
 def normalize(x, axis=-1, mean=None, variance=None, epsilon=1e-5):
@@ -266,6 +266,8 @@ def one_hot(x, num_classes, *, dtype=jnp.float64):
     dtype: optional, a float dtype for the returned values (default float64 if
       jax_enable_x64 is true, otherwise float32).
   """
+  num_classes = core.concrete_or_error(int, num_classes,
+                                       "in jax.nn.one_hot argument `num_classes`")
   dtype = dtypes.canonicalize_dtype(dtype)
   x = jnp.asarray(x)
   lhs = x[..., jnp.newaxis]
@@ -292,12 +294,14 @@ def hard_sigmoid(x):
   """
   return relu6(x + 3.) / 6.
 
-def hard_swish(x):
-  r"""Hard Swish activation function
+def hard_silu(x):
+  r"""Hard SiLU activation function
 
   Computes the element-wise function
 
   .. math::
-    \mathrm{hard\_swish}(x) = x \cdot \mathrm{hard\_sigmoid}(x)
+    \mathrm{hard\_silu}(x) = x \cdot \mathrm{hard\_sigmoid}(x)
   """
   return x * hard_sigmoid(x)
+
+hard_swish = hard_silu

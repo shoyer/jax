@@ -26,6 +26,8 @@ Operators
     abs
     add
     acos
+    argmax
+    argmin
     asin
     atan
     atan2
@@ -69,6 +71,7 @@ Operators
     erfc
     erf_inv
     exp
+    expand_dims
     expm1
     fft
     floor
@@ -121,6 +124,7 @@ Operators
     sort_key_val
     sqrt
     square
+    squeeze
     sub
     tan
     tie_in
@@ -165,5 +169,6 @@ Parallelism support is experimental.
     pmin
     pmean
     ppermute
+    pshuffle
     pswapaxes
     axis_index
