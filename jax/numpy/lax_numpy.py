@@ -2723,13 +2723,13 @@ def _polyval(p, x):
   shape = lax.broadcast_shapes(p.shape[1:], x.shape)
   dtype = result_type(p, x)
   y = lax.full_like(x, 0, shape=shape, dtype=dtype)
-  y, _ = lax.scan(lambda y, p: (y * x + p, None), y, p)
+  y, _ = lax.scan(lambda y, p: (y * x + p, None), y, p, unroll=64)
   return y
-
 
 @_wraps(np.polyval)
 def polyval(p, x):
   return _polyval(p, x)
+
 
 @_wraps(np.polyadd)
 def polyadd(a1, a2):
