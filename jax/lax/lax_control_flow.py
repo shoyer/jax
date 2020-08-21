@@ -45,7 +45,7 @@ from jax.interpreters import masking
 from jax.lib import xla_bridge as xb
 from jax.lib import xla_client
 from jax.util import (partial, unzip2, unzip4, safe_map, safe_zip, split_list,
-                      split_dict, cache, extend_name_stack)
+                      split_dict, cache, extend_name_stack, overrideable)
 from jax.tree_util import (tree_flatten, tree_unflatten, treedef_is_leaf,
                            treedef_children, treedef_tuple, tree_multimap)
 from jax import ad_util
@@ -625,6 +625,7 @@ def switch(index, branches: Sequence[Callable], operand):
   return tree_unflatten(out_trees[0], out)
 
 
+@overrideable('lax.cond')
 def cond(*args, **kwargs):
   """Conditionally apply ``true_fun`` or ``false_fun``.
 
@@ -1127,6 +1128,7 @@ core.custom_typechecks[cond_p] = _cond_typecheck
 
 ### scan
 
+@overrideable('lax.scan')
 def scan(f, init, xs, length=None, reverse=False, unroll=1):
   """Scan a function over leading array axes while carrying along state.
 

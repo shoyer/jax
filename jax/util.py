@@ -12,10 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
+import contextlib
 import functools
 import itertools as it
+import threading
 import types
+from typing import Callable, Mapping
 
 import numpy as np
 
@@ -242,3 +244,69 @@ def wrap_name(name, transform_name):
 
 def extend_name_stack(stack, name=''):
   return stack + name + '/'
+
+
+class ContextVar:
+  """Like contextvars.ContextVar, but implemented with threading.local()."""
+  # TODO(shoyer): remove in favor of contextvars when JAX requires Python 3.7+
+
+  def __init__(self, name, *, default):
+    self.name = name
+    self.default = default
+    self._state = threading.local()
+    self._state.value = default
+    self._lock = threading.Lock()
+
+  def get(self):
+    return getattr(self._state, 'value', self.default)
+
+  def set(self, value):
+    with self._lock:
+      old_value = self.get()
+      self._state.value = value
+    return old_value
+
+  def reset(self, token):
+    self._state.value = token
+
+
+_OVERRIDES = {}
+
+
+def overrideable(name: str):
+  """Make an internal JAX function overrideable."""
+  def decorator(fun: Callable):
+    _OVERRIDES[name] = ContextVar(name, default=fun)
+    @functools.wraps(fun)
+    def wrapper(*args, **kwargs):
+      impl = _OVERRIDES[name].get()
+      with override_context({name: fun}):
+        return impl(*args, **kwargs)
+    return wrapper
+  return decorator
+
+@contextlib.contextmanager
+def override_context(implementations: Mapping[str, Callable]):
+  """Override the implementations of JAX functions within a context.
+
+  This is function is EXPERIMENTAL and offers no backwards compatibility
+  guarantees. It exists for the sole purpose of overriding the implementation of
+  higher order JAX functions within a limited scope, particularly for libraries
+  such as Haiku and Flax that implement their own versions of this functions
+  that support mutation.
+
+  Usage example:
+
+    with jax.override_context({'lax.scan': my_scan}):
+      # all calls to lax.scan() are replaced by my_scan()
+      ...
+
+  This context manager only overrides implementations within the current thread,
+  and hence is thread-safe.
+  """
+  tokens = {k: _OVERRIDES[k].set(v) for k, v in implementations.items()}
+  try:
+    yield
+  finally:
+    for k, v in tokens.items():
+      _OVERRIDES[k].reset(v)

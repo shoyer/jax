@@ -3547,5 +3547,31 @@ class BufferDonationTest(jtu.JaxTestCase):
         self.assertEqual(buffer.is_deleted(), deleted)
 
 
+class _CountedCalls:
+  def __init__(self, fun):
+    self.fun = fun
+    self.calls = 0
+  def __call__(self, *args, **kwargs):
+    self.calls += 1
+    return self.fun(*args, **kwargs)
+
+
+class OverrideTest(jtu.JaxTestCase):
+
+  def test(self):
+
+    counted_jit = _CountedCalls(jax.jit)
+
+    jax.jit(lambda x: x)(1)
+    self.assertEqual(counted_jit.calls, 0)
+
+    with jax.util.override_context({'jit': counted_jit}):
+      jax.jit(lambda x: x)(1)
+    self.assertEqual(counted_jit.calls, 1)
+
+    jax.jit(lambda x: x)(1)
+    self.assertEqual(counted_jit.calls, 1)
+
+
 if __name__ == '__main__':
   absltest.main(testLoader=jtu.JaxTestLoader())

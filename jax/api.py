@@ -47,7 +47,7 @@ from .tree_util import (tree_map, tree_flatten, tree_unflatten, tree_structure,
                         tree_transpose, tree_leaves, tree_multimap,
                         treedef_is_leaf, Partial)
 from .util import (unzip2, curry, partial, safe_map, safe_zip, prod, split_list,
-                   extend_name_stack, wrap_name, cache)
+                   extend_name_stack, wrap_name, overrideable)
 from .lib import xla_bridge as xb
 from .lib import xla_client as xc
 # Unused imports to be exported
@@ -105,6 +105,7 @@ _thread_local_state = _ThreadLocalState()
 _EXPERIMENTAL_CPP_JIT = False
 
 
+@overrideable('jit')
 def jit(fun: Callable[..., T],
         static_argnums: Union[int, Iterable[int]] = (),
         device=None,
@@ -641,6 +642,7 @@ def _xla_computation(
 
   return computation_maker
 
+@overrideable('grad')
 def grad(fun: Callable, argnums: Union[int, Sequence[int]] = 0,
          has_aux: bool = False, holomorphic: bool = False) -> Callable:
   """Creates a function which evaluates the gradient of ``fun``.
@@ -698,6 +700,7 @@ def grad(fun: Callable, argnums: Union[int, Sequence[int]] = 0,
 
   return grad_f_aux if has_aux else grad_f
 
+@overrideable('value_and_grad')
 def value_and_grad(fun: Callable, argnums: Union[int, Sequence[int]] = 0,
                    has_aux: bool = False, holomorphic: bool = False
                    ) -> Callable[..., Tuple[Any, Any]]:
@@ -1014,6 +1017,7 @@ def _dtype(x):
   return dtypes.canonicalize_dtype(dtypes.result_type(x))
 
 
+@overrideable('vmap')
 def vmap(fun: Callable[..., T], in_axes=0, out_axes=0, axis_name=None) -> Callable[..., T]:
   """Vectorizing map. Creates a function which maps ``fun`` over argument axes.
 
@@ -2032,6 +2036,7 @@ def eval_shape(fun: Callable, *args, **kwargs):
   return tree_unflatten(out_tree(), out)
 
 
+@overrideable('checkpoint')
 def checkpoint(fun: Callable, concrete: bool = False) -> Callable:
   """Make ``fun`` recompute internal linearization points when differentiated.
 
