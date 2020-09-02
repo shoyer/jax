@@ -280,6 +280,9 @@ def overrideable(name: str):
     @functools.wraps(fun)
     def wrapper(*args, **kwargs):
       impl = _OVERRIDES[name].get()
+      # A typical override will call back into the original JAX function after
+      # doing some processing. We remove the override here, because otherwise
+      # this would end up in an infinite loop.
       with override_context({name: fun}):
         return impl(*args, **kwargs)
     return wrapper
@@ -292,13 +295,15 @@ def override_context(implementations: Mapping[str, Callable]):
   This is function is EXPERIMENTAL and offers no backwards compatibility
   guarantees. It exists for the sole purpose of overriding the implementation of
   higher order JAX functions within a limited scope, particularly for libraries
-  such as Haiku and Flax that implement their own versions of this functions
+  such as Haiku and Flax that implement their own versions of these functions
   that support mutation.
 
   Usage example:
 
     with jax.override_context({'lax.scan': my_scan}):
-      # all calls to lax.scan() are replaced by my_scan()
+      # All calls to lax.scan() are replaced by my_scan().
+      # However, calls to lax.scan() from *inside* the implementation of
+      # my_scan() will use the original.
       ...
 
   This context manager only overrides implementations within the current thread,
