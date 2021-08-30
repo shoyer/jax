@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import dataclasses
 import itertools as it
 from functools import partial, reduce, wraps
 import itertools
@@ -36,6 +37,7 @@ from .._src import dtypes
 from .._src.util import prod, safe_map as map, split_list, unzip2, unzip3
 from ..tree_util import (
     tree_structure, tree_flatten, tree_unflatten,
+    register_pytree_node_class
 )
 from jax import api_util
 
@@ -163,6 +165,32 @@ class TreeTracer(core.Tracer):
       return core.full_lower(value)
     else:
       return self
+
+  def to_pytree(self):
+    return TreePytree(self._trace, self.treedefs, self.leafshapes, self.leaves)
+
+
+@register_pytree_node_class
+@dataclasses.dataclass
+class TreePytree:
+  trace: core.Trace
+  treedefs: Tuple[TreeDef, ...]
+  leafshapes: Tuple[Tuple[Tuple[int, ...], ...], ...]
+  leaves: Leaves
+
+  def tree_flatten(self):
+    children = self.leaves.values()
+    aux_data = (self.trace, self.treedefs, self.leafshapes, self.leaves.keys())
+    return (children, aux_data)
+
+  @classmethod
+  def tree_unflatten(cls, aux_data, children):
+    trace, treedefs, leafshapes, leaves_keys = aux_data
+    leaves = dict(zip(leaves_keys, children))
+    return cls(trace, treedefs, leafshapes, leaves)
+
+  def to_tracer(self):
+    return TreeTracer(self.trace, self.treedefs, self.leafshapes, self.leaves)
 
 
 def _flatten_tracer(tracer):
